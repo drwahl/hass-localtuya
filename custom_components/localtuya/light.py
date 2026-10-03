@@ -411,7 +411,15 @@ class LocalTuyaLight(LocalTuyaEntity, LightEntity):
     def is_scene_mode(self):
         """Return true if the light is in scene mode."""
         if self._config.get(CONF_SCENE_PROFILE) == ETERNITY_EAVE:
-            return self.has_config(CONF_SCENE)
+            # For Eternity Eave, the scene DP (106) contains the mode value
+            # Check if the current scene value matches a known scene
+            scene_value = self.dp_value(CONF_SCENE)
+            if scene_value and len(scene_value) >= 4:
+                scene_prefix = scene_value[:4].lower()
+                return scene_prefix in self._scenes.as_dict.values() or scene_prefix in (
+                    v[:4] for v in eternity_eave_scenes().values()
+                )
+            return False
         color_mode = self.__get_color_mode()
         return color_mode is not None and color_mode.startswith(self._modes.scene)
 
@@ -629,9 +637,20 @@ class LocalTuyaLight(LocalTuyaEntity, LightEntity):
                 scene_dp = self._config.get(CONF_SCENE)
                 if scene_dp:
                     current_scene = self.dp_value(CONF_SCENE)
+                    _LOGGER.debug(
+                        "Eternity Eave brightness adjust: current_scene=%s, brightness=%s, lower=%s, upper=%s",
+                        current_scene, brightness, self._lower_brightness, self._upper_brightness
+                    )
                     if current_scene:
-                        # Modify the scene hex to use the new brightness
-                        modified_scene = self._modify_scene_brightness(current_scene, brightness)
+                        # For Eternity Eave, mode string is 12 chars: scene_id(4) + speed(4) + brightness(4)
+                        if self._config.get(CONF_SCENE_PROFILE) == ETERNITY_EAVE and len(current_scene) == 12:
+                            # Replace last 4 hex chars with new brightness
+                            scene_brightness = int(map_range(brightness, self._lower_brightness, self._upper_brightness, 0, 1000))
+                            modified_scene = current_scene[:8] + f"{scene_brightness:04x}"
+                            _LOGGER.debug("Eternity Eave modified scene: %s -> %s", current_scene, modified_scene)
+                        else:
+                            # Modify the scene hex to use the new brightness
+                            modified_scene = self._modify_scene_brightness(current_scene, brightness)
                         states[scene_dp] = modified_scene
                 # Keep the current scene color_mode
                 color_mode = self.__get_color_mode()
