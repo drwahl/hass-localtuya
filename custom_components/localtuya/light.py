@@ -319,7 +319,7 @@ class LocalTuyaLight(LocalTuyaEntity, LightEntity):
     def brightness(self):
         """Return the brightness of the light."""
         brightness = self._brightness
-        if brightness is not None and (self.is_color_mode or self.is_white_mode):
+        if brightness is not None and (self.is_color_mode or self.is_white_mode or self.is_scene_mode):
             return map_range(brightness, self._lower_brightness, self._upper_brightness)
         return None
 
@@ -705,6 +705,18 @@ class LocalTuyaLight(LocalTuyaEntity, LightEntity):
 
         if ColorMode.COLOR_TEMP in self.supported_color_modes:
             self._color_temp = self.dp_value(CONF_COLOR_TEMP)
+
+        # For Eternity Eave, extract brightness from mode string (last 4 hex chars)
+        # when in scene mode and no separate brightness DP
+        if self._config.get(CONF_SCENE_PROFILE) == ETERNITY_EAVE:
+            mode_value = self.dp_value(CONF_COLOR_MODE) or self.dp_value(CONF_SCENE)
+            if mode_value and len(mode_value) >= 12:
+                # Last 4 hex chars = brightness (0-1000)
+                try:
+                    scene_brightness = int(mode_value[-4:], 16)
+                    self._brightness = scene_brightness
+                except ValueError:
+                    pass
 
         if self.is_scene_mode and supported & LightEntityFeature.EFFECT:
             if self._config.get(CONF_SCENE_PROFILE) == ETERNITY_EAVE:
