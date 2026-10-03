@@ -461,6 +461,49 @@ class LocalTuyaLight(LocalTuyaEntity, LightEntity):
             else self._modes.white
         )
 
+    def _modify_scene_brightness(self, scene_hex: str, brightness: int) -> str:
+        """Modify the brightness value in a scene hex string.
+
+        Scene data v2 format (RGBW_1000): Each segment is 14 chars:
+        - 2 chars: segment index
+        - 4 chars: hue (0-360)
+        - 4 chars: saturation (0-1000)
+        - 4 chars: brightness/value (0-1000)
+
+        For RGBW_255 format: 14 chars with brightness as last 2 bytes (0-255)
+        """
+        if not scene_hex or len(scene_hex) < 14:
+            return scene_hex
+
+        # Map brightness from device range (0-1000) to scene range
+        scene_brightness = int(map_range(brightness, self._lower_brightness, self._upper_brightness, 0, 1000))
+        scene_brightness_hex = f"{scene_brightness:04x}"
+
+        # Check if it's v2 format (segments of 14 chars each)
+        if len(scene_hex) % 14 == 0 and len(scene_hex) >= 14:
+            # V2 format - modify brightness in each segment
+            segments = [scene_hex[i:i+14] for i in range(0, len(scene_hex), 14)]
+            modified_segments = []
+            for seg in segments:
+                if len(seg) == 14:
+                    # Format: index(2) + hue(4) + sat(4) + brightness(4)
+                    modified_segments.append(seg[:10] + scene_brightness_hex)
+                else:
+                    modified_segments.append(seg)
+            return "".join(modified_segments)
+
+        # Check if it's v1 format (RGBW_255) - 14 chars with brightness in last 4 chars (0-255)
+        elif len(scene_hex) == 14:
+            # Format: hue(4) + sat(2) + brightness(2) + ... (14 chars total)
+            # Actually: "bd76000168ffff" = hue(4) + sat(2) + bright(2) + ? + ?
+            scene_brightness_255 = int(map_range(brightness, self._lower_brightness, self._upper_brightness, 0, 255))
+            scene_brightness_hex = f"{scene_brightness_255:02x}"
+            # Replace bytes 8-10 (brightness in v1 format)
+            return scene_hex[:8] + scene_brightness_hex + scene_hex[10:]
+
+        # For BLE format (base64), we can't easily modify
+        return scene_hex
+
     def __to_color_raw(self, hs, brightness):
         return base64.b64encode(
             # BASE64-encoded 4-byte value: HHSL
@@ -580,7 +623,19 @@ class LocalTuyaLight(LocalTuyaEntity, LightEntity):
             )
             brightness = max(brightness, self._lower_brightness)
 
-            if self.is_color_mode and self._hs is not None:
+            # If we're in scene mode, modify the scene hex to include the new brightness
+            # This allows dimming a scene without switching away from it
+            if self.is_scene_mode and not (ATTR_HS_COLOR in kwargs or ATTR_COLOR_TEMP_KELVIN in kwargs or ATTR_WHITE in kwargs):
+                scene_dp = self._config.get(CONF_SCENE)
+                if scene_dp:
+                    current_scene = self.dp_value(CONF_SCENE)
+                    if current_scene:
+                        # Modify the scene hex to use the new brightness
+                        modified_scene = self._modify_scene_brightness(current_scene, brightness)
+                        states[scene_dp] = modified_scene
+                # Keep the current scene color_mode
+                color_mode = self.__get_color_mode()
+            elif self.is_color_mode and self._hs is not None:
                 states[self._config.get(CONF_COLOR)] = self.__to_color(
                     self._hs, brightness
                 )
